@@ -226,15 +226,9 @@ gcloud services enable run.googleapis.com --project "$GCP_PROJECT"
 DATABASE_URL_ARG="$NEON_DATABASE_URL"
 
 if [[ "$DEPLOY_MODE" == "lite" ]]; then
-  _MIN_INST=0
-  _MAX_INST=1
-  _MEM="512Mi"
-  _CPU=1
+  _MIN_INST=0; _MAX_INST=1; _MEM="512Mi"; _CPU=1
 else
-  _MIN_INST=1
-  _MAX_INST=3
-  _MEM="1Gi"
-  _CPU=2
+  _MIN_INST=0; _MAX_INST=5; _MEM="1Gi"; _CPU=2
 fi
 
 printf '\n=== deploying Cloud Run service: %s ===\n' "$SERVICE_NAME"
