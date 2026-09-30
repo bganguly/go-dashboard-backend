@@ -187,7 +187,7 @@ if ! gcloud artifacts repositories describe "$REGISTRY" \
     --repository-format=docker --location="$GCP_REGION" --project="$GCP_PROJECT"
 fi
 
-TAG=$(find "$ROOT_DIR/cmd" "$ROOT_DIR/internal" "$ROOT_DIR/Dockerfile" "$ROOT_DIR/go.mod" \
+TAG=$(find "$ROOT_DIR/cmd" "$ROOT_DIR/internal" "$ROOT_DIR/migrations" "$ROOT_DIR/Dockerfile" "$ROOT_DIR/go.mod" \
     -type f 2>/dev/null | sort | xargs cat 2>/dev/null \
   | _shasum | cut -c1-16 || true)
 TAG="${TAG:-$(date +%Y%m%d%H%M%S)}"
