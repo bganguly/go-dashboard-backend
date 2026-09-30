@@ -97,9 +97,20 @@ printf 'Auth: %s  Project: %s  Region: %s\n' "$ACTIVE_ACCOUNT" "$GCP_PROJECT" "$
 _STEP="db prompt"
 _saved_neon_url=""
 _saved_use_neon=""
+_sibling_neon_url=""
+
 if [[ -f "$ENV_FILE" ]]; then
   _saved_use_neon=$(grep -E '^USE_NEON=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
   _saved_neon_url=$(grep -E '^NEON_DATABASE_URL=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
+fi
+
+_SPRINGBOOT_DIR="$(cd "$ROOT_DIR/../../java-implementations/springboot-dashboard-backend" 2>/dev/null && pwd || true)"
+if [[ -n "$_SPRINGBOOT_DIR" ]]; then
+  for _f in "$_SPRINGBOOT_DIR"/.env.gcp.*; do
+    [[ -f "$_f" ]] || continue
+    _u=$(grep -E '^NEON_DATABASE_URL=' "$_f" | cut -d= -f2- | tr -d '"' || true)
+    [[ -n "$_u" ]] && { _sibling_neon_url="$_u"; break; }
+  done
 fi
 
 if [[ -n "$_saved_use_neon" ]]; then
@@ -130,9 +141,16 @@ else
     *)     USE_NEON="true"  ;;
   esac
   if [[ "$USE_NEON" == "true" ]]; then
-    printf '  Enter your Neon DATABASE_URL\n'
-    printf '  (postgresql://user:pass@ep-xxx.neon.tech/dbname?sslmode=require):\n  > '
-    read -r NEON_DATABASE_URL
+    if [[ -n "$_sibling_neon_url" ]]; then
+      printf '\n  Neon URL (reuse from springboot repo, or paste a new one):\n'
+      printf '  [%s]\n  > ' "${_sibling_neon_url:0:72}"
+      read -r _INPUT_URL
+      NEON_DATABASE_URL="${_INPUT_URL:-$_sibling_neon_url}"
+    else
+      printf '  Enter your Neon DATABASE_URL\n'
+      printf '  (postgresql://user:pass@ep-xxx.neon.tech/dbname?sslmode=require):\n  > '
+      read -r NEON_DATABASE_URL
+    fi
     [[ -n "$NEON_DATABASE_URL" ]] || { printf 'Neon URL is required.\n'; exit 1; }
   else
     printf '  Enter DATABASE_URL:\n  > '
