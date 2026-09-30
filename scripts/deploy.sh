@@ -59,12 +59,17 @@ printf 'Auth: account %s  region %s\n' "$ACCOUNT_ID" "$AWS_REGION"
 _STEP="db config"
 _saved_url=""
 [[ -f "$ENV_FILE" ]] && _saved_url=$(grep -E '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' || true)
+if [[ -z "$_saved_url" ]]; then
+  _repo_root="$(cd "$ROOT_DIR/../.." && pwd)"
+  _saved_url=$(find "$_repo_root" -name '.env*' -not -name '*.example' -type f 2>/dev/null \
+    | xargs grep -h -E '^(NEON_)?DATABASE_URL=' 2>/dev/null \
+    | grep 'neon\.tech' | head -1 | cut -d= -f2- | tr -d '"' || true)
+fi
 
 if [[ -n "$_saved_url" ]]; then
-  printf '\n  Database URL: %s...  [saved]\n' "${_saved_url:0:40}"
-  printf '  Continue with saved? [Y/n]: '
-  read -r _REPLACE
-  case "${_REPLACE:-Y}" in
+  printf '\n  Use saved db creds (Y/n): '
+  read -r _USE_SAVED
+  case "${_USE_SAVED:-Y}" in
     [Nn]*) printf '  Enter Neon DATABASE_URL:\n  > '; read -r DATABASE_URL ;;
     *) DATABASE_URL="$_saved_url" ;;
   esac
@@ -114,12 +119,15 @@ else
       --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPowerUser
     aws iam attach-role-policy --role-name "$CB_ROLE" \
       --policy-arn arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess
-    aws iam put-role-policy --role-name "$CB_ROLE" \
-      --policy-name CodeBuildLogs \
-      --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"logs:CreateLogGroup\",\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Resource\":\"arn:aws:logs:${AWS_REGION}:${ACCOUNT_ID}:log-group:/aws/codebuild/*\"}]}"
     printf '  Waiting for IAM propagation...\n'
     sleep 10
   fi
+  aws iam put-role-policy --role-name "$CB_ROLE" \
+    --policy-name CodeBuildLogs \
+    --policy-document "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"logs:CreateLogGroup\",\"logs:CreateLogStream\",\"logs:PutLogEvents\"],\"Resource\":\"arn:aws:logs:${AWS_REGION}:${ACCOUNT_ID}:log-group:/aws/codebuild/*\"}]}"
+  aws iam put-role-policy --role-name "$CB_ROLE" \
+    --policy-name CodeBuildECRPublic \
+    --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ecr-public:GetAuthorizationToken","sts:GetServiceBearerToken"],"Resource":"*"}]}'
 
   _STEP="s3 source bucket"
   SRC_BUCKET="go-dash-codebuild-src-${ACCOUNT_ID}"
@@ -136,7 +144,7 @@ else
   _STEP="codebuild project"
   _CB_EXISTS=$(aws codebuild batch-get-projects --names "$CODEBUILD_PROJECT" \
     --query 'projects[0].name' --output text 2>/dev/null || true)
-  _cb_source="{\"type\":\"S3\",\"location\":\"${SRC_BUCKET}/go-dash-backend-source.tar.gz\"}"
+  _cb_source="{\"type\":\"S3\",\"location\":\"${SRC_BUCKET}/go-dash-backend-source.zip\"}"
   _cb_env="{\"type\":\"LINUX_CONTAINER\",\"image\":\"aws/codebuild/standard:7.0\",\"computeType\":\"BUILD_GENERAL1_SMALL\",\"privilegedMode\":true,\"environmentVariables\":[]}"
   if [[ "$_CB_EXISTS" == "None" || -z "$_CB_EXISTS" ]]; then
     printf '  Creating CodeBuild project %s...\n' "$CODEBUILD_PROJECT"
@@ -147,22 +155,25 @@ else
       --environment "$_cb_env" \
       --service-role "$CB_ROLE_ARN" \
       --region "$AWS_REGION" >/dev/null
+  else
+    aws codebuild update-project --name "$CODEBUILD_PROJECT" --source "$_cb_source" --region "$AWS_REGION" >/dev/null
   fi
 
   _STEP="image build"
-  _tmptar=$(mktemp "${TMPDIR:-/tmp}/go-dash-be-src.XXXXXX.tar.gz")
+  _tmpzip="${TMPDIR:-/tmp}/go-dash-be-src-$$.zip"
   printf 'Packaging source...\n'
-  tar -czf "$_tmptar" -C "$ROOT_DIR" --exclude='.git' --exclude='.env*' --exclude='*.tar.gz' .
+  (cd "$ROOT_DIR" && zip -qr "$_tmpzip" . -x '.git/*' -x '.env*' -x '*.zip')
   printf 'Uploading source to S3...\n'
-  aws s3 cp "$_tmptar" "s3://${SRC_BUCKET}/go-dash-backend-source.tar.gz" >/dev/null
-  rm -f "$_tmptar"
+  aws s3 cp "$_tmpzip" "s3://${SRC_BUCKET}/go-dash-backend-source.zip" >/dev/null
+  rm -f "$_tmpzip"
 
-  _tmpbspec=$(mktemp "${TMPDIR:-/tmp}/go-dash-buildspec.XXXXXX.yml")
+  _tmpbspec="${TMPDIR:-/tmp}/go-dash-buildspec-$$.yml"
   cat > "$_tmpbspec" <<'BSPEC'
 version: 0.2
 phases:
   pre_build:
     commands:
+      - aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_URI
       - docker pull $IMAGE_CACHE || true
   build:
@@ -217,13 +228,13 @@ _STEP="auto scaling config"
 _ASC_ARN=$(aws apprunner list-auto-scaling-configurations \
   --auto-scaling-configuration-name "go-dash-scale-to-zero" \
   --region "$AWS_REGION" \
-  --query 'AutoScalingConfigurationSummaryList[?Status==`ACTIVE`].AutoScalingConfigurationArn' \
+  --query 'AutoScalingConfigurationSummaryList[?Status==`active`].AutoScalingConfigurationArn' \
   --output text 2>/dev/null | awk 'NF{print $1;exit}' || true)
 if [[ -z "$_ASC_ARN" ]]; then
-  printf '  Creating auto-scaling config (min=0, max=2)...\n'
+  printf '  Creating auto-scaling config (min=1, max=2)...\n'
   _ASC_ARN=$(aws apprunner create-auto-scaling-configuration \
     --auto-scaling-configuration-name "go-dash-scale-to-zero" \
-    --min-size 0 --max-size 2 --max-concurrency 100 \
+    --min-size 1 --max-size 2 --max-concurrency 100 \
     --region "$AWS_REGION" \
     --query 'AutoScalingConfiguration.AutoScalingConfigurationArn' --output text)
 fi
@@ -233,7 +244,7 @@ _SVC_ARN=$(aws apprunner list-services --region "$AWS_REGION" \
   --query "ServiceSummaryList[?ServiceName=='${SERVICE_NAME}'].ServiceArn" \
   --output text 2>/dev/null | awk 'NF{print $1;exit}' || true)
 
-_env_vars="[{\"Name\":\"DATABASE_URL\",\"Value\":\"${DATABASE_URL}\"},{\"Name\":\"CORS_ORIGIN\",\"Value\":\"*\"},{\"Name\":\"MIGRATIONS_DIR\",\"Value\":\"/app/migrations\"},{\"Name\":\"BACKEND_RUNTIME\",\"Value\":\"go\"},{\"Name\":\"PORT\",\"Value\":\"8080\"}]"
+_env_vars="{\"DATABASE_URL\":\"${DATABASE_URL}\",\"CORS_ORIGIN\":\"*\",\"MIGRATIONS_DIR\":\"/app/migrations\",\"BACKEND_RUNTIME\":\"go\",\"PORT\":\"8080\"}"
 _source_config="{\"ImageRepository\":{\"ImageIdentifier\":\"${IMAGE}\",\"ImageConfiguration\":{\"Port\":\"8080\",\"RuntimeEnvironmentVariables\":${_env_vars}},\"ImageRepositoryType\":\"ECR\"},\"AuthenticationConfiguration\":{\"AccessRoleArn\":\"${AR_ECR_ROLE_ARN}\"},\"AutoDeploymentsEnabled\":false}"
 _instance_config="{\"Cpu\":\"1024\",\"Memory\":\"2048\"}"
 
