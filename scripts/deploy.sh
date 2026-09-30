@@ -30,8 +30,8 @@ printf '\n=== go-dashboard-backend ===\n\n'
 printf '  [1] Local  — Go server on localhost + local Postgres (no GCP cost)'
 (( _local_running )) && printf ' [running]' || printf ' [not detected]'
 printf '\n'
-printf '  [2] Lite   — GCP: Cloud Run (scales to zero) · Neon or local Postgres\n'
-printf '  [3] Full   — GCP: Cloud Run · Neon (same schema, larger dataset)\n'
+printf '  [2] Lite   — GCP: Cloud Run · 4M rows · scales to zero · minimal cost\n'
+printf '  [3] Full   — GCP: Cloud Run · 4M rows · always warm · considerable cost\n'
 printf '\nChoice [1/2/3, default 2]: '
 read -r _MODE
 case "${_MODE:-2}" in
