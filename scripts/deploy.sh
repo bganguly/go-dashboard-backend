@@ -142,10 +142,15 @@ else
   esac
   if [[ "$USE_NEON" == "true" ]]; then
     if [[ -n "$_sibling_neon_url" ]]; then
-      printf '\n  Neon URL (reuse from springboot repo, or paste a new one):\n'
-      printf '  [%s]\n  > ' "${_sibling_neon_url:0:72}"
-      read -r _INPUT_URL
-      NEON_DATABASE_URL="${_INPUT_URL:-$_sibling_neon_url}"
+      printf '\n  Reuse Neon URL from springboot repo? [Y/n]: '
+      read -r _REUSE
+      case "${_REUSE:-Y}" in
+        [Nn]*)
+          printf '  Enter your Neon DATABASE_URL\n  > '
+          read -r NEON_DATABASE_URL
+          ;;
+        *) NEON_DATABASE_URL="$_sibling_neon_url" ;;
+      esac
     else
       printf '  Enter your Neon DATABASE_URL\n'
       printf '  (postgresql://user:pass@ep-xxx.neon.tech/dbname?sslmode=require):\n  > '
