@@ -29,9 +29,6 @@ func main() {
 	defer pool.Close()
 
 	migrationsDir := resolveMigrationsDir()
-	if err := appMigrate.Run(pool, migrationsDir); err != nil {
-		log.Fatalf("migrations: %v", err)
-	}
 
 	aggCache := cache.NewAggregatesCache()
 	orderSvc := service.NewOrderService(pool, aggCache)
@@ -78,8 +75,17 @@ func main() {
 		api.GET("/regions", regionH.List)
 	}
 
-	// Cache warmup — runs in background, doesn't block startup.
-	go warmupCache(ctx, aggSvc, aggCache)
+	// Migrations and cache warmup run in background so Cloud Run startup probe
+	// sees the port bound immediately. The DB schema is already live from Spring
+	// Boot; these migrations add Go-specific tables and backfill derived data.
+	go func() {
+		if err := appMigrate.Run(pool, migrationsDir); err != nil {
+			log.Printf("migrations: %v", err)
+		} else {
+			log.Printf("migrations: complete")
+			go warmupCache(ctx, aggSvc, aggCache)
+		}
+	}()
 
 	port := os.Getenv("PORT")
 	if port == "" {
