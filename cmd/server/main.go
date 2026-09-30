@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/bganguly/go-dashboard/internal/cache"
@@ -15,6 +17,7 @@ import (
 	appMigrate "github.com/bganguly/go-dashboard/internal/migrate"
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
 
@@ -80,6 +83,7 @@ func main() {
 
 	// Cache warmup — runs in background, doesn't block startup.
 	go warmupCache(ctx, aggSvc, aggCache)
+	go warmupCountCache(ctx, pool)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -100,34 +104,82 @@ func resolveMigrationsDir() string {
 	return filepath.Join(filepath.Dir(exe), "../../migrations")
 }
 
+const defaultFrom = "2020-01-01"
+
 func warmupCache(ctx context.Context, aggSvc *service.AggregateService, aggCache *cache.AggregatesCache) {
 	time.Sleep(2 * time.Second)
-	now := time.Now()
-	ranges := [][2]string{
-		{now.AddDate(0, -1, 0).Format("2006-01-02"), now.Format("2006-01-02")},
-		{now.AddDate(0, -3, 0).Format("2006-01-02"), now.Format("2006-01-02")},
-		{now.AddDate(0, -6, 0).Format("2006-01-02"), now.Format("2006-01-02")},
-		{now.AddDate(-1, 0, 0).Format("2006-01-02"), now.Format("2006-01-02")},
+	to := time.Now().Format("2006-01-02")
+	key := cache.Key(defaultFrom, to, 4)
+	if _, ok := aggCache.Get(key); ok {
+		return
 	}
-	for _, r := range ranges {
-		from, to := r[0], r[1]
-		key := cache.Key(from, to, 4)
-		if _, ok := aggCache.Get(key); ok {
+	data, err := aggSvc.GetDailyAggregates(ctx, defaultFrom, to, "", "", "", nil, nil, 4)
+	if err != nil {
+		return
+	}
+	total, err := aggSvc.GetExactTotal(ctx, defaultFrom, to, "", "", "", nil, nil)
+	if err != nil {
+		return
+	}
+	aggCache.Put(key, map[string]any{
+		"data":                   data,
+		"totalOrders":            service.AdjustCount(total),
+		"totalOrdersApproximate": service.IsApproximateCount(total),
+	})
+}
+
+func warmupCountCache(ctx context.Context, pool *pgxpool.Pool) {
+	time.Sleep(3 * time.Second)
+	rows, err := pool.Query(ctx,
+		`WITH recent AS (
+		   SELECT c."firstName", c."lastName"
+		   FROM orders o JOIN customers c ON c.id = o."customerId"
+		   ORDER BY o."placedAt" DESC LIMIT 40
+		 ) SELECT DISTINCT "firstName", "lastName" FROM recent`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	seen := map[string]bool{}
+	var tokens []string
+	for rows.Next() {
+		var first, last string
+		if err := rows.Scan(&first, &last); err != nil {
 			continue
 		}
-		data, err := aggSvc.GetDailyAggregates(ctx, from, to, "", "", "", nil, nil, 4)
-		if err != nil {
+		for _, t := range []string{strings.ToLower(strings.TrimSpace(first)), strings.ToLower(strings.TrimSpace(last))} {
+			if t != "" && !seen[t] {
+				seen[t] = true
+				tokens = append(tokens, t)
+			}
+		}
+	}
+	rows.Close()
+
+	to := time.Now().Format("2006-01-02")
+	for _, tok := range tokens {
+		key := fmt.Sprintf("q=%s&status=&regionCode=&from=%s&to=%s&minTotal=&maxTotal=", tok, defaultFrom, to)
+		var existing int64
+		err := pool.QueryRow(ctx,
+			`SELECT total FROM count_cache WHERE cache_key=$1 AND cached_at > NOW() - INTERVAL '30 days'`,
+			key).Scan(&existing)
+		if err == nil {
 			continue
 		}
-		total, err := aggSvc.GetExactTotal(ctx, from, to, "", "", "", nil, nil)
-		if err != nil {
+		var count int64
+		if err := pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM orders o
+			 WHERE o."placedAt" >= $1::timestamptz
+			   AND o."placedAt" <= ($2::date + interval '1 day' - interval '1 second')
+			   AND o.search_text ILIKE $3`,
+			defaultFrom, to, "%"+tok+"%").Scan(&count); err != nil {
 			continue
 		}
-		aggCache.Put(key, map[string]any{
-			"data":                   data,
-			"totalOrders":            service.AdjustCount(total),
-			"totalOrdersApproximate": service.IsApproximateCount(total),
-		})
+		_, _ = pool.Exec(ctx,
+			`INSERT INTO count_cache (cache_key,total,cached_at) VALUES ($1,$2,NOW())
+			 ON CONFLICT (cache_key) DO UPDATE SET total=$2, cached_at=NOW()`,
+			key, count)
 	}
 }
 
