@@ -29,8 +29,7 @@ func main() {
 	defer pool.Close()
 
 	migrationsDir := resolveMigrationsDir()
-	dsn := buildDSN()
-	if err := appMigrate.Run(dsn, migrationsDir); err != nil {
+	if err := appMigrate.Run(pool, migrationsDir); err != nil {
 		log.Fatalf("migrations: %v", err)
 	}
 
@@ -132,22 +131,3 @@ func resolveMigrationsDir() string {
 	return filepath.Join(filepath.Dir(exe), "../../migrations")
 }
 
-func buildDSN() string {
-	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
-		return dsn
-	}
-	host := os.Getenv("DB_HOST")
-	if host == "" {
-		host = "localhost"
-	}
-	port := os.Getenv("DB_PORT")
-	if port == "" {
-		port = "5432"
-	}
-	sslmode := os.Getenv("DB_SSLMODE")
-	if sslmode == "" {
-		sslmode = "disable"
-	}
-	return "postgres://" + os.Getenv("DB_USER") + ":" + os.Getenv("DB_PASSWORD") +
-		"@" + host + ":" + port + "/" + os.Getenv("DB_NAME") + "?sslmode=" + sslmode
-}

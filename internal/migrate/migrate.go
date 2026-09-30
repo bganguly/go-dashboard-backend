@@ -1,27 +1,83 @@
 package migrate
 
 import (
-	"errors"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
-	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/pgx/v5"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func Run(databaseURL, migrationsPath string) error {
-	dbURL := databaseURL
-	if strings.HasPrefix(dbURL, "postgresql://") {
-		dbURL = "pgx5://" + dbURL[len("postgresql://"):]
-	} else if strings.HasPrefix(dbURL, "postgres://") {
-		dbURL = "pgx5://" + dbURL[len("postgres://"):]
+var versionRe = regexp.MustCompile(`^V(\d+)__`)
+
+type migration struct {
+	version int
+	path    string
+}
+
+func Run(pool *pgxpool.Pool, migrationsPath string) error {
+	ctx := context.Background()
+
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS go_schema_migrations (
+			version     INTEGER PRIMARY KEY,
+			filename    TEXT    NOT NULL,
+			applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`); err != nil {
+		return fmt.Errorf("create tracking table: %w", err)
 	}
-	m, err := migrate.New("file://"+migrationsPath, dbURL)
+
+	entries, err := os.ReadDir(migrationsPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("read migrations dir %q: %w", migrationsPath, err)
 	}
-	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
-		return err
+
+	var migrations []migration
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		m := versionRe.FindStringSubmatch(name)
+		if m == nil {
+			continue
+		}
+		v, _ := strconv.Atoi(m[1])
+		migrations = append(migrations, migration{version: v, path: filepath.Join(migrationsPath, name)})
+	}
+	sort.Slice(migrations, func(i, j int) bool { return migrations[i].version < migrations[j].version })
+
+	for _, mg := range migrations {
+		var applied bool
+		_ = pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM go_schema_migrations WHERE version = $1)`,
+			mg.version,
+		).Scan(&applied)
+		if applied {
+			continue
+		}
+
+		sql, err := os.ReadFile(mg.path)
+		if err != nil {
+			return fmt.Errorf("read %s: %w", mg.path, err)
+		}
+
+		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+			return fmt.Errorf("apply V%d (%s): %w", mg.version, filepath.Base(mg.path), err)
+		}
+
+		filename := strings.TrimPrefix(filepath.Base(mg.path), "/")
+		if _, err := pool.Exec(ctx,
+			`INSERT INTO go_schema_migrations (version, filename) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			mg.version, filename,
+		); err != nil {
+			return fmt.Errorf("record V%d: %w", mg.version, err)
+		}
 	}
 	return nil
 }
