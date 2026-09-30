@@ -5,12 +5,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
 	"github.com/bganguly/go-dashboard/internal/cache"
 	internaldmb "github.com/bganguly/go-dashboard/internal/db"
 	"github.com/bganguly/go-dashboard/internal/handler"
+	appMigrate "github.com/bganguly/go-dashboard/internal/migrate"
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -25,6 +27,11 @@ func main() {
 		log.Fatalf("db connect: %v", err)
 	}
 	defer pool.Close()
+
+	migrationsDir := resolveMigrationsDir()
+	if err := appMigrate.Run(pool, migrationsDir); err != nil {
+		log.Fatalf("migrations: %v", err)
+	}
 
 	aggCache := cache.NewAggregatesCache()
 	orderSvc := service.NewOrderService(pool, aggCache)
@@ -83,6 +90,14 @@ func main() {
 	if err := r.Run(":" + port); err != nil {
 		log.Fatalf("server: %v", err)
 	}
+}
+
+func resolveMigrationsDir() string {
+	if d := os.Getenv("MIGRATIONS_DIR"); d != "" {
+		return d
+	}
+	exe, _ := os.Executable()
+	return filepath.Join(filepath.Dir(exe), "../../migrations")
 }
 
 func warmupCache(ctx context.Context, aggSvc *service.AggregateService, aggCache *cache.AggregatesCache) {

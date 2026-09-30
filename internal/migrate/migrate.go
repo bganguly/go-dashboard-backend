@@ -20,8 +20,30 @@ type migration struct {
 	path    string
 }
 
+// flywayVersions returns the number of versions Spring Boot Flyway has applied.
+// Zero means the table doesn't exist or is empty (fresh DB).
+func flywayVersions(ctx context.Context, pool *pgxpool.Pool) int {
+	var tableExists bool
+	_ = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = 'flyway_schema_history'
+		)`).Scan(&tableExists)
+	if !tableExists {
+		return 0
+	}
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT COUNT(*) FROM flyway_schema_history`).Scan(&n)
+	return n
+}
+
 func Run(pool *pgxpool.Pool, migrationsPath string) error {
 	ctx := context.Background()
+
+	if n := flywayVersions(ctx, pool); n > 0 {
+		fmt.Printf("migrations: Spring Boot Flyway has applied %d versions — skipping Go migrations\n", n)
+		return nil
+	}
 
 	if _, err := pool.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS go_schema_migrations (
