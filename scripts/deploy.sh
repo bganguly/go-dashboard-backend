@@ -142,7 +142,9 @@ else
   esac
   if [[ "$USE_NEON" == "true" ]]; then
     if [[ -n "$_sibling_neon_url" ]]; then
-      printf '\n  Reuse Neon URL from springboot repo? [Y/n]: '
+      _sibling_label="Neon (${_sibling_neon_url:0:40}...)"
+      printf '\n  Database: %s  [from springboot repo]\n' "$_sibling_label"
+      printf '  Continue with saved? [Y/n]: '
       read -r _REUSE
       case "${_REUSE:-Y}" in
         [Nn]*)
