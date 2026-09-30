@@ -111,11 +111,11 @@ func warmupCache(ctx context.Context, aggSvc *service.AggregateService, aggCache
 	}
 	for _, r := range ranges {
 		from, to := r[0], r[1]
-		key := cache.Key(from, to, 5)
+		key := cache.Key(from, to, 4)
 		if _, ok := aggCache.Get(key); ok {
 			continue
 		}
-		data, err := aggSvc.GetDailyAggregates(ctx, from, to, "", "", "", nil, nil, 5)
+		data, err := aggSvc.GetDailyAggregates(ctx, from, to, "", "", "", nil, nil, 4)
 		if err != nil {
 			continue
 		}
