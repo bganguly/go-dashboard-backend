@@ -478,13 +478,21 @@ func (s *OrderService) tryDailyRollup(ctx context.Context,
 		(status == "" || strings.TrimSpace(status) == "") &&
 		(regionCode == "" || strings.TrimSpace(regionCode) == "") &&
 		minTotal == nil && maxTotal == nil
-	if !pureDateRange || from == "" || to == "" {
+	if !pureDateRange {
 		return 0, false, nil
 	}
 	var sum int64
-	err := s.db.QueryRow(ctx,
-		`SELECT COALESCE(SUM("totalOrders"),0) FROM daily_order_count WHERE date BETWEEN $1::date AND $2::date`,
-		from, to).Scan(&sum)
+	var err error
+	if from == "" && to == "" {
+		err = s.db.QueryRow(ctx,
+			`SELECT COALESCE(SUM("totalOrders"),0) FROM daily_order_count`).Scan(&sum)
+	} else if from != "" && to != "" {
+		err = s.db.QueryRow(ctx,
+			`SELECT COALESCE(SUM("totalOrders"),0) FROM daily_order_count WHERE date BETWEEN $1::date AND $2::date`,
+			from, to).Scan(&sum)
+	} else {
+		return 0, false, nil
+	}
 	if err != nil {
 		return 0, false, err
 	}
