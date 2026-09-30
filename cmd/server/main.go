@@ -5,14 +5,12 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"time"
 
 	"github.com/bganguly/go-dashboard/internal/cache"
 	internaldmb "github.com/bganguly/go-dashboard/internal/db"
 	"github.com/bganguly/go-dashboard/internal/handler"
-	appMigrate "github.com/bganguly/go-dashboard/internal/migrate"
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -27,8 +25,6 @@ func main() {
 		log.Fatalf("db connect: %v", err)
 	}
 	defer pool.Close()
-
-	migrationsDir := resolveMigrationsDir()
 
 	aggCache := cache.NewAggregatesCache()
 	orderSvc := service.NewOrderService(pool, aggCache)
@@ -75,17 +71,8 @@ func main() {
 		api.GET("/regions", regionH.List)
 	}
 
-	// Migrations and cache warmup run in background so Cloud Run startup probe
-	// sees the port bound immediately. The DB schema is already live from Spring
-	// Boot; these migrations add Go-specific tables and backfill derived data.
-	go func() {
-		if err := appMigrate.Run(pool, migrationsDir); err != nil {
-			log.Printf("migrations: %v", err)
-		} else {
-			log.Printf("migrations: complete")
-			go warmupCache(ctx, aggSvc, aggCache)
-		}
-	}()
+	// Cache warmup — runs in background, doesn't block startup.
+	go warmupCache(ctx, aggSvc, aggCache)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -129,11 +116,4 @@ func warmupCache(ctx context.Context, aggSvc *service.AggregateService, aggCache
 	}
 }
 
-func resolveMigrationsDir() string {
-	if d := os.Getenv("MIGRATIONS_DIR"); d != "" {
-		return d
-	}
-	exe, _ := os.Executable()
-	return filepath.Join(filepath.Dir(exe), "../../migrations")
-}
 
