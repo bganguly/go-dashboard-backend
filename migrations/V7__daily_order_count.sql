@@ -5,7 +5,7 @@
 -- already covers the category breakdown, but summing per-category rows
 -- double-counts any order whose items span more than one category. This
 -- table only ever holds one row per day, so it can't double-count anything.
-CREATE TABLE "daily_order_count" (
+CREATE TABLE IF NOT EXISTS "daily_order_count" (
   "date"         date   PRIMARY KEY,
   "totalOrders"  bigint NOT NULL DEFAULT 0
 );
@@ -13,4 +13,5 @@ CREATE TABLE "daily_order_count" (
 INSERT INTO "daily_order_count" ("date", "totalOrders")
 SELECT "placedAt"::date, COUNT(*)
 FROM "orders"
-GROUP BY "placedAt"::date;
+GROUP BY "placedAt"::date
+ON CONFLICT ("date") DO NOTHING;

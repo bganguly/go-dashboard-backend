@@ -6,7 +6,7 @@
 -- 1. Add column
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS search_text TEXT;
 
--- 2. Populate all rows (runs inside Flyway transaction — may take several minutes)
+-- 2. Populate rows that have not been backfilled yet (idempotent re-run safe)
 UPDATE orders o
 SET search_text =
   c."firstName" || ' ' || c."lastName" || ' ' ||
@@ -18,7 +18,8 @@ SET search_text =
   o."placedAt"::date::text
 FROM customers c, regions r
 WHERE c.id = o."customerId"
-  AND r.id = o."regionId";
+  AND r.id = o."regionId"
+  AND o.search_text IS NULL;
 
 -- 3. GIN trigram index (no CONCURRENTLY — Flyway runs inside a transaction)
 CREATE INDEX IF NOT EXISTS idx_orders_search_text_trgm
