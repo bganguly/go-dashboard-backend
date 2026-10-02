@@ -111,6 +111,7 @@ func warmupAggregatesCache(ctx context.Context, svc *service.AggregateService, c
 	now := time.Now()
 	ranges := [][2]string{
 		{now.AddDate(0, 0, -30).Format("2006-01-02"), now.Format("2006-01-02")},
+		{now.AddDate(0, 0, -60).Format("2006-01-02"), now.Format("2006-01-02")},
 		{now.AddDate(0, 0, -90).Format("2006-01-02"), now.Format("2006-01-02")},
 		{now.AddDate(0, 0, -180).Format("2006-01-02"), now.Format("2006-01-02")},
 		{now.AddDate(-1, 0, 0).Format("2006-01-02"), now.Format("2006-01-02")},
