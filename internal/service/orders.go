@@ -181,11 +181,15 @@ func (s *OrderService) exactCount(ctx context.Context,
 	q, status, regionCode, from, to string,
 	minTotal, maxTotal *float64) (int64, error) {
 
+	log.Printf("[count] exactCount entered")
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
 
 	// count_cache first — single PK lookup (~1ms on hit). Covers every code
 	// path below including rollup results written on the previous call.
-	if hit, err := s.readCountCache(ctx, cacheKey); err == nil {
+	tRC := time.Now()
+	hit, rcErr := s.readCountCache(ctx, cacheKey)
+	log.Printf("[count] readCountCache took %dms err=%v", time.Since(tRC).Milliseconds(), rcErr)
+	if rcErr == nil {
 		log.Printf("[count] cache HIT key=%s val=%d", cacheKey, hit)
 		return hit, nil
 	}
