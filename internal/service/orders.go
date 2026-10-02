@@ -39,19 +39,6 @@ func AdjustCount(n int64) int64 {
 	return n
 }
 
-// defaultOrdersCacheKey returns a cache key when the request matches the
-// default API explorer profile (page 1, no filters, placedAt DESC). Returns ""
-// when the request is not cacheable.
-func defaultOrdersCacheKey(q string, page, pageSize int, sort, dir, status, regionCode, from, to string, minTotal, maxTotal *float64) string {
-	if q == "" && page == 1 && pageSize == 20 &&
-		(sort == "placedAt" || sort == "") && (dir == "DESC" || dir == "") &&
-		status == "" && regionCode == "" && from == "" && to == "" &&
-		minTotal == nil && maxTotal == nil {
-		return "orders|default|p1|ps20"
-	}
-	return ""
-}
-
 // ListOrders — offset-based pagination with optional reverse-scan for last page.
 func (s *OrderService) ListOrders(ctx context.Context,
 	q string, page, pageSize int, sort, dir string,
@@ -61,17 +48,6 @@ func (s *OrderService) ListOrders(ctx context.Context,
 	t0 := time.Now()
 	pageSize = clamp(pageSize, 1, maxPageSize)
 	page = max1(page)
-
-	// In-process cache for the default no-filter page-1 view. The AggregatesCache
-	// is already invalidated by CreateOrder, so staleness is bounded by that or TTL.
-	if ck := defaultOrdersCacheKey(q, page, pageSize, sort, dir, status, regionCode, from, to, minTotal, maxTotal); ck != "" {
-		if cached, ok := s.cache.Get(ck); ok {
-			if result, ok := cached.(model.OrderListResult); ok {
-				log.Printf("[orders] cache HIT %s %dms", ck, time.Since(t0).Milliseconds())
-				return result, nil
-			}
-		}
-	}
 
 	safeSort := safeOrderSort(sort)
 	safeDir := safeOrderDir(dir)
@@ -129,11 +105,6 @@ func (s *OrderService) ListOrders(ctx context.Context,
 	}
 
 	result, err := s.toResult(ctx, orderRows, page, pageSize, total, totalPages, approximate)
-	if err == nil {
-		if ck := defaultOrdersCacheKey(q, page, pageSize, sort, dir, status, regionCode, from, to, minTotal, maxTotal); ck != "" {
-			s.cache.Put(ck, result)
-		}
-	}
 	log.Printf("[orders] ListOrders total=%dms q=%q from=%s to=%s page=%d", time.Since(t0).Milliseconds(), q, from, to, page)
 	return result, err
 }
