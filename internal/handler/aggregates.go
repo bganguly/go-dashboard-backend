@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
@@ -39,13 +41,16 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 	dataCh := make(chan dataResult, 1)
 	totalCh := make(chan dataResult, 1)
 
+	t0 := time.Now()
 	var wg sync.WaitGroup
 	if includeData {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			tData := time.Now()
 			v, err := h.svc.GetDailyAggregates(c.Request.Context(),
 				from, to, q, status, regionCode, minTotal, maxTotal, topCategories)
+			log.Printf("[agg] GetDailyAggregates %dms", time.Since(tData).Milliseconds())
 			dataCh <- dataResult{v, err}
 		}()
 	}
@@ -53,12 +58,15 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			tTotal := time.Now()
 			v, err := h.svc.GetExactTotal(c.Request.Context(),
 				from, to, q, status, regionCode, minTotal, maxTotal)
+			log.Printf("[agg] GetExactTotal %dms", time.Since(tTotal).Milliseconds())
 			totalCh <- dataResult{v, err}
 		}()
 	}
 	wg.Wait()
+	log.Printf("[agg] total handler %dms", time.Since(t0).Milliseconds())
 
 	body := gin.H{}
 	if includeData {
