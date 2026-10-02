@@ -39,6 +39,19 @@ func AdjustCount(n int64) int64 {
 	return n
 }
 
+// defaultOrdersCacheKey returns a cache key when the request matches the
+// default API explorer profile (page 1, no filters, placedAt DESC). Returns ""
+// when the request is not cacheable.
+func defaultOrdersCacheKey(q string, page, pageSize int, sort, dir, status, regionCode, from, to string, minTotal, maxTotal *float64) string {
+	if q == "" && page == 1 && pageSize == 20 &&
+		(sort == "placedAt" || sort == "") && (dir == "DESC" || dir == "") &&
+		status == "" && regionCode == "" && from == "" && to == "" &&
+		minTotal == nil && maxTotal == nil {
+		return "orders|default|p1|ps20"
+	}
+	return ""
+}
+
 // ListOrders — offset-based pagination with optional reverse-scan for last page.
 func (s *OrderService) ListOrders(ctx context.Context,
 	q string, page, pageSize int, sort, dir string,
@@ -48,6 +61,17 @@ func (s *OrderService) ListOrders(ctx context.Context,
 	t0 := time.Now()
 	pageSize = clamp(pageSize, 1, maxPageSize)
 	page = max1(page)
+
+	// In-process cache for the default no-filter page-1 view. The AggregatesCache
+	// is already invalidated by CreateOrder, so staleness is bounded by that or TTL.
+	if ck := defaultOrdersCacheKey(q, page, pageSize, sort, dir, status, regionCode, from, to, minTotal, maxTotal); ck != "" {
+		if cached, ok := s.cache.Get(ck); ok {
+			if result, ok := cached.(model.OrderListResult); ok {
+				log.Printf("[orders] cache HIT %s %dms", ck, time.Since(t0).Milliseconds())
+				return result, nil
+			}
+		}
+	}
 
 	safeSort := safeOrderSort(sort)
 	safeDir := safeOrderDir(dir)
@@ -105,6 +129,11 @@ func (s *OrderService) ListOrders(ctx context.Context,
 	}
 
 	result, err := s.toResult(ctx, orderRows, page, pageSize, total, totalPages, approximate)
+	if err == nil {
+		if ck := defaultOrdersCacheKey(q, page, pageSize, sort, dir, status, regionCode, from, to, minTotal, maxTotal); ck != "" {
+			s.cache.Put(ck, result)
+		}
+	}
 	log.Printf("[orders] ListOrders total=%dms q=%q from=%s to=%s page=%d", time.Since(t0).Milliseconds(), q, from, to, page)
 	return result, err
 }
@@ -181,15 +210,22 @@ func (s *OrderService) exactCount(ctx context.Context,
 	q, status, regionCode, from, to string,
 	minTotal, maxTotal *float64) (int64, error) {
 
-	if rollup, ok, err := s.tryDailyRollup(ctx, q, status, regionCode, from, to, minTotal, maxTotal); ok {
-		log.Printf("[count] rollup hit key=%s val=%d", buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal), rollup)
-		return rollup, err
-	}
-
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
+
+	// count_cache first — single PK lookup (~1ms on hit). Covers every code
+	// path below including rollup results written on the previous call.
 	if hit, err := s.readCountCache(ctx, cacheKey); err == nil {
 		log.Printf("[count] cache HIT key=%s val=%d", cacheKey, hit)
 		return hit, nil
+	}
+
+	// Rollup: pure date-range queries can be answered by SUM(daily_order_count)
+	// without scanning 4M rows. Write the result to count_cache so the next
+	// call is a 1ms PK lookup instead of a fresh SUM.
+	if rollup, ok, err := s.tryDailyRollup(ctx, q, status, regionCode, from, to, minTotal, maxTotal); ok {
+		log.Printf("[count] rollup hit key=%s val=%d", cacheKey, rollup)
+		_ = s.writeCountCache(ctx, cacheKey, rollup)
+		return rollup, err
 	}
 
 	log.Printf("[count] cache MISS key=%s", cacheKey)
@@ -233,13 +269,14 @@ func (s *OrderService) ExactCountUncapped(ctx context.Context,
 	q, status, regionCode, from, to string,
 	minTotal, maxTotal *float64) (int64, error) {
 
-	if rollup, ok, err := s.tryDailyRollup(ctx, q, status, regionCode, from, to, minTotal, maxTotal); ok {
-		return rollup, err
-	}
-
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
 	if hit, err := s.readCountCache(ctx, cacheKey); err == nil {
 		return hit, nil
+	}
+
+	if rollup, ok, err := s.tryDailyRollup(ctx, q, status, regionCode, from, to, minTotal, maxTotal); ok {
+		_ = s.writeCountCache(ctx, cacheKey, rollup)
+		return rollup, err
 	}
 
 	qa := &queryArgs{}

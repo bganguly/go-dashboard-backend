@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -29,5 +30,18 @@ func NewPool(ctx context.Context) (*pgxpool.Pool, error) {
 			sslmode,
 		)
 	}
-	return pgxpool.New(ctx, dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	// Keep 2 connections always open so requests never pay TLS + Postgres auth
+	// overhead on the first touch after an idle period. Neon closes idle
+	// connections after ~5 min; HealthCheckPeriod of 30s detects and replaces
+	// them before a request arrives.
+	cfg.MinConns = 2
+	cfg.MaxConns = 10
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.MaxConnIdleTime = 4 * time.Minute
+	cfg.HealthCheckPeriod = 30 * time.Second
+	return pgxpool.NewWithConfig(ctx, cfg)
 }
