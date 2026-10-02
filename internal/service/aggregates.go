@@ -89,8 +89,8 @@ func (s *AggregateService) queryDailySummary(ctx context.Context, from, to, regi
 		where += ` AND "regionCode" = ANY(ARRAY[` + strings.Join(quoted, ",") + `])`
 	}
 	sql := `SELECT date::text AS day, "categoryName" AS category,
-	               SUM("totalOrders") AS total_orders, SUM("totalRevenue") AS total_revenue,
-	               SUM("totalItems") AS total_items
+	               SUM("totalOrders")::bigint AS total_orders, CAST(SUM("totalRevenue") AS FLOAT8) AS total_revenue,
+	               SUM("totalItems")::bigint AS total_items
 	        FROM daily_summary ` + where + ` GROUP BY date, "categoryName" ORDER BY date`
 	return s.queryAggRows(ctx, sql, args...)
 }
@@ -102,8 +102,8 @@ func (s *AggregateService) queryStatusCategorySummary(ctx context.Context, from,
 		quoted[i] = fmt.Sprintf("'%s'::\"OrderStatus\"", strings.ReplaceAll(st, "'", "''"))
 	}
 	sql := `SELECT date::text AS day, "categoryName" AS category,
-	               SUM("totalOrders") AS total_orders, SUM("totalRevenue") AS total_revenue,
-	               SUM("totalItems") AS total_items
+	               SUM("totalOrders")::bigint AS total_orders, CAST(SUM("totalRevenue") AS FLOAT8) AS total_revenue,
+	               SUM("totalItems")::bigint AS total_items
 	        FROM daily_status_category_summary
 	        WHERE status = ANY(ARRAY[` + strings.Join(quoted, ",") + `])
 	        AND date BETWEEN $1::date AND $2::date
@@ -134,8 +134,8 @@ func (s *AggregateService) queryFilterCategorySummary(ctx context.Context, from,
 		where += ` AND ` + strings.Join(extra, ` AND `)
 	}
 	sql := `SELECT date::text AS day, "categoryName" AS category,
-	               SUM("totalOrders") AS total_orders, SUM("totalRevenue") AS total_revenue,
-	               SUM("totalItems") AS total_items
+	               SUM("totalOrders")::bigint AS total_orders, CAST(SUM("totalRevenue") AS FLOAT8) AS total_revenue,
+	               SUM("totalItems")::bigint AS total_items
 	        FROM daily_filter_category_summary ` + where + ` GROUP BY date, "categoryName" ORDER BY date`
 	return s.queryAggRows(ctx, sql, from, to)
 }
@@ -174,8 +174,8 @@ func (s *AggregateService) queryOrderCategoryFacts(ctx context.Context, from, to
 		where += ` AND ` + strings.Join(extra, ` AND `)
 	}
 	sql := `SELECT date::text AS day, "categoryName" AS category,
-	               COUNT(DISTINCT "orderId") AS total_orders, SUM("totalRevenue") AS total_revenue,
-	               SUM("totalItems") AS total_items
+	               COUNT(DISTINCT "orderId")::bigint AS total_orders, CAST(SUM("totalRevenue") AS FLOAT8) AS total_revenue,
+	               SUM("totalItems")::bigint AS total_items
 	        FROM order_category_facts ` + where + ` GROUP BY date, "categoryName" ORDER BY date`
 	return s.queryAggRows(ctx, sql, qa.Args()...)
 }
@@ -208,11 +208,11 @@ func (s *AggregateService) queryViaSearchText(ctx context.Context, from, to, q, 
 	}
 	if minTotal != nil {
 		p := qa.Add(*minTotal)
-		clauses = append(clauses, `o.total >= `+p)
+		clauses = append(clauses, `CAST(o.total AS FLOAT8) >= `+p)
 	}
 	if maxTotal != nil {
 		p := qa.Add(*maxTotal)
-		clauses = append(clauses, `o.total <= `+p)
+		clauses = append(clauses, `CAST(o.total AS FLOAT8) <= `+p)
 	}
 	where := `WHERE o."placedAt"::date BETWEEN ` + fromP + `::date AND ` + toP + `::date`
 	if len(clauses) > 0 {
@@ -220,7 +220,7 @@ func (s *AggregateService) queryViaSearchText(ctx context.Context, from, to, q, 
 	}
 	sql := `SELECT o."placedAt"::date::text AS day, cat.name AS category,
 	               COUNT(DISTINCT o.id)::bigint AS total_orders,
-	               COALESCE(SUM(oi.quantity * oi."unitPrice" * (1 - oi.discount)), 0) AS total_revenue,
+	               COALESCE(CAST(SUM(oi.quantity * CAST(oi."unitPrice" AS FLOAT8) * (1 - CAST(oi.discount AS FLOAT8))) AS FLOAT8), 0) AS total_revenue,
 	               COALESCE(SUM(oi.quantity), 0)::bigint AS total_items
 	        FROM orders o
 	        JOIN customers c ON c.id = o."customerId"
@@ -267,9 +267,9 @@ func (s *AggregateService) queryMultiTokenViaCte(ctx context.Context, from, to, 
 	  SELECT id FROM customers WHERE ` + strings.Join(tokenClauses, ` AND `) + `
 	)
 	SELECT dcs.date::text AS day, dcs."categoryName" AS category,
-	       SUM(dcs."totalOrders") AS total_orders,
-	       SUM(dcs."totalRevenue") AS total_revenue,
-	       SUM(dcs."totalItems") AS total_items
+	       SUM(dcs."totalOrders")::bigint AS total_orders,
+	       CAST(SUM(dcs."totalRevenue") AS FLOAT8) AS total_revenue,
+	       SUM(dcs."totalItems")::bigint AS total_items
 	FROM daily_customer_category_summary dcs
 	WHERE dcs."customerId" IN (SELECT id FROM matching_customers)
 	AND dcs.date BETWEEN ` + fromP + `::date AND ` + toP + `::date` +
