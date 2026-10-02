@@ -3,6 +3,7 @@ package handler
 import (
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -21,6 +22,8 @@ func NewAggregateHandler(svc *service.AggregateService, cache *service.Aggregate
 
 func (h *AggregateHandler) Get(c *gin.Context) {
 	handlerStart := time.Now()
+	host, _ := os.Hostname()
+	log.Printf("[AGG] request instance=%s", host)
 	from := c.Query("from")
 	to := c.Query("to")
 	if from == "" || to == "" {
