@@ -234,9 +234,12 @@ func (s *OrderService) ExactCountUncapped(ctx context.Context,
 	minTotal, maxTotal *float64) (int64, error) {
 
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
+	tRC := time.Now()
 	if hit, err := s.readCountCache(ctx, cacheKey); err == nil {
+		log.Printf("[agg/count] cache HIT %dms key=%s val=%d", time.Since(tRC).Milliseconds(), cacheKey, hit)
 		return hit, nil
 	}
+	log.Printf("[agg/count] cache MISS %dms key=%s", time.Since(tRC).Milliseconds(), cacheKey)
 
 	qa := &queryArgs{}
 	where, needsRegionJoin := buildOrderWhere(q, status, regionCode, from, to, minTotal, maxTotal, qa)
@@ -247,9 +250,11 @@ func (s *OrderService) ExactCountUncapped(ctx context.Context,
 
 	countSQL := `SELECT COUNT(*) FROM orders o ` + regionJoin + where
 	var n int64
+	tCnt := time.Now()
 	if err := s.db.QueryRow(ctx, countSQL, qa.Args()...).Scan(&n); err != nil {
 		return 0, err
 	}
+	log.Printf("[agg/count] COUNT(*) %dms val=%d", time.Since(tCnt).Milliseconds(), n)
 	_ = s.writeCountCache(ctx, cacheKey, n)
 	return n, nil
 }
