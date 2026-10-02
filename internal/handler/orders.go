@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/bganguly/go-dashboard/internal/model"
 	"github.com/bganguly/go-dashboard/internal/service"
@@ -19,10 +20,10 @@ func NewOrderHandler(svc *service.OrderService) *OrderHandler {
 
 func (h *OrderHandler) List(c *gin.Context) {
 	q := c.Query("q")
-	page := queryInt(c, "page", 1)
-	pageSize := queryInt(c, "pageSize", 20)
-	sort := queryStr(c, "sort", "placedAt")
-	dir := queryStr(c, "dir", "desc")
+	page := queryInt(c, "page", 0) + 1
+	pageSize := queryInt(c, "size", 20)
+	sortRaw := queryStr(c, "sort", "placedAt")
+	sort, dir := parseSortParam(sortRaw, queryStr(c, "dir", "desc"))
 	status := c.Query("status")
 	regionCode := c.Query("regionCode")
 	from := c.Query("from")
@@ -113,6 +114,13 @@ func queryStr(c *gin.Context, key, def string) string {
 		return def
 	}
 	return v
+}
+
+func parseSortParam(raw, fallbackDir string) (string, string) {
+	if i := strings.LastIndex(raw, ","); i != -1 {
+		return raw[:i], raw[i+1:]
+	}
+	return raw, fallbackDir
 }
 
 func queryFloat(c *gin.Context, key string) *float64 {

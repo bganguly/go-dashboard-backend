@@ -219,15 +219,6 @@ func (s *OrderService) exactCount(ctx context.Context,
 		return hit, nil
 	}
 
-	// Rollup: pure date-range queries can be answered by SUM(daily_order_count)
-	// without scanning 4M rows. Write the result to count_cache so the next
-	// call is a 1ms PK lookup instead of a fresh SUM.
-	if rollup, ok, err := s.tryDailyRollup(ctx, q, status, regionCode, from, to, minTotal, maxTotal); ok {
-		log.Printf("[count] rollup hit key=%s val=%d", cacheKey, rollup)
-		_ = s.writeCountCache(ctx, cacheKey, rollup)
-		return rollup, err
-	}
-
 	log.Printf("[count] cache MISS key=%s", cacheKey)
 	qa := &queryArgs{}
 	where, needsRegionJoin := buildOrderWhere(q, status, regionCode, from, to, minTotal, maxTotal, qa)
@@ -272,11 +263,6 @@ func (s *OrderService) ExactCountUncapped(ctx context.Context,
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
 	if hit, err := s.readCountCache(ctx, cacheKey); err == nil {
 		return hit, nil
-	}
-
-	if rollup, ok, err := s.tryDailyRollup(ctx, q, status, regionCode, from, to, minTotal, maxTotal); ok {
-		_ = s.writeCountCache(ctx, cacheKey, rollup)
-		return rollup, err
 	}
 
 	qa := &queryArgs{}
@@ -505,35 +491,6 @@ func (s *OrderService) fetchItems(ctx context.Context, orderIDs []int) (map[int]
 		})
 	}
 	return result, rows.Err()
-}
-
-func (s *OrderService) tryDailyRollup(ctx context.Context,
-	q, status, regionCode, from, to string,
-	minTotal, maxTotal *float64) (int64, bool, error) {
-
-	pureDateRange := (q == "" || strings.TrimSpace(q) == "") &&
-		(status == "" || strings.TrimSpace(status) == "") &&
-		(regionCode == "" || strings.TrimSpace(regionCode) == "") &&
-		minTotal == nil && maxTotal == nil
-	if !pureDateRange {
-		return 0, false, nil
-	}
-	var sum int64
-	var err error
-	if from == "" && to == "" {
-		err = s.db.QueryRow(ctx,
-			`SELECT COALESCE(SUM("totalOrders"),0) FROM daily_order_count`).Scan(&sum)
-	} else if from != "" && to != "" {
-		err = s.db.QueryRow(ctx,
-			`SELECT COALESCE(SUM("totalOrders"),0) FROM daily_order_count WHERE date BETWEEN $1::date AND $2::date`,
-			from, to).Scan(&sum)
-	} else {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	return sum, true, nil
 }
 
 func (s *OrderService) readCountCache(ctx context.Context, key string) (int64, error) {
