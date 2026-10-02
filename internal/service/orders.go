@@ -43,7 +43,6 @@ func (s *OrderService) ListOrders(ctx context.Context,
 	status, regionCode, from, to string,
 	minTotal, maxTotal *float64) (model.OrderListResult, error) {
 
-	t0 := time.Now()
 	pageSize = clamp(pageSize, 1, maxPageSize)
 	page = max1(page)
 
@@ -102,9 +101,7 @@ func (s *OrderService) ListOrders(ctx context.Context,
 		reverseSlice(orderRows)
 	}
 
-	result, err := s.toResult(ctx, orderRows, page, pageSize, total, totalPages, approximate)
-	log.Printf("[orders] ListOrders total=%dms q=%q from=%s to=%s page=%d", time.Since(t0).Milliseconds(), q, from, to, page)
-	return result, err
+	return s.toResult(ctx, orderRows, page, pageSize, total, totalPages, approximate)
 }
 
 // ListOrdersByCursor — keyset pagination for default placedAt DESC sort.
@@ -179,20 +176,14 @@ func (s *OrderService) exactCount(ctx context.Context,
 	q, status, regionCode, from, to string,
 	minTotal, maxTotal *float64) (int64, error) {
 
-	log.Printf("[count] exactCount entered")
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
 
 	// count_cache first — single PK lookup (~1ms on hit). Covers every code
 	// path below including rollup results written on the previous call.
-	tRC := time.Now()
 	hit, rcErr := s.readCountCache(ctx, cacheKey)
-	log.Printf("[count] readCountCache took %dms err=%v", time.Since(tRC).Milliseconds(), rcErr)
 	if rcErr == nil {
-		log.Printf("[count] cache HIT key=%s val=%d", cacheKey, hit)
 		return hit, nil
 	}
-
-	log.Printf("[count] cache MISS key=%s", cacheKey)
 	qa := &queryArgs{}
 	where, needsRegionJoin := buildOrderWhere(q, status, regionCode, from, to, minTotal, maxTotal, qa)
 	regionJoin := ""
@@ -200,7 +191,6 @@ func (s *OrderService) exactCount(ctx context.Context,
 		regionJoin = `JOIN regions r ON r.id = o."regionId" `
 	}
 
-	t0 := time.Now()
 	if hasShortToken(q) {
 		capArg := qa.Add(countSentinel)
 		cappedSQL := fmt.Sprintf(`SELECT COUNT(*) FROM (SELECT 1 FROM orders o %s%s LIMIT %s) _cap`,
@@ -209,7 +199,6 @@ func (s *OrderService) exactCount(ctx context.Context,
 		if err := s.db.QueryRow(ctx, cappedSQL, qa.Args()...).Scan(&capped); err != nil {
 			return 0, err
 		}
-		log.Printf("[count] capped COUNT %dms val=%d (sentinel=%v)", time.Since(t0).Milliseconds(), capped, capped >= countSentinel)
 		if capped < countSentinel {
 			_ = s.writeCountCache(ctx, cacheKey, capped)
 		}
@@ -221,7 +210,6 @@ func (s *OrderService) exactCount(ctx context.Context,
 	if err := s.db.QueryRow(ctx, countSQL, qa.Args()...).Scan(&n); err != nil {
 		return 0, err
 	}
-	log.Printf("[count] full COUNT %dms val=%d", time.Since(t0).Milliseconds(), n)
 	if err := s.writeCountCache(ctx, cacheKey, n); err != nil {
 		log.Printf("[count] writeCountCache err: %v", err)
 	}
@@ -234,12 +222,9 @@ func (s *OrderService) ExactCountUncapped(ctx context.Context,
 	minTotal, maxTotal *float64) (int64, error) {
 
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
-	tRC := time.Now()
 	if hit, err := s.readCountCache(ctx, cacheKey); err == nil {
-		log.Printf("[agg/count] cache HIT %dms key=%s val=%d", time.Since(tRC).Milliseconds(), cacheKey, hit)
 		return hit, nil
 	}
-	log.Printf("[agg/count] cache MISS %dms key=%s", time.Since(tRC).Milliseconds(), cacheKey)
 
 	qa := &queryArgs{}
 	where, needsRegionJoin := buildOrderWhere(q, status, regionCode, from, to, minTotal, maxTotal, qa)
@@ -250,11 +235,9 @@ func (s *OrderService) ExactCountUncapped(ctx context.Context,
 
 	countSQL := `SELECT COUNT(*) FROM orders o ` + regionJoin + where
 	var n int64
-	tCnt := time.Now()
 	if err := s.db.QueryRow(ctx, countSQL, qa.Args()...).Scan(&n); err != nil {
 		return 0, err
 	}
-	log.Printf("[agg/count] COUNT(*) %dms val=%d", time.Since(tCnt).Milliseconds(), n)
 	_ = s.writeCountCache(ctx, cacheKey, n)
 	return n, nil
 }

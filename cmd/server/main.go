@@ -38,12 +38,13 @@ func main() {
 
 	orderSvc := service.NewOrderService(pool)
 	aggSvc := service.NewAggregateService(pool, orderSvc)
+	aggCache := service.NewAggregatesCache()
 	customerSvc := service.NewCustomerService(pool)
 	regionSvc := service.NewRegionService(pool)
 	statsSvc := service.NewStatsService(pool)
 
 	orderH := handler.NewOrderHandler(orderSvc)
-	aggH := handler.NewAggregateHandler(aggSvc)
+	aggH := handler.NewAggregateHandler(aggSvc, aggCache)
 	customerH := handler.NewCustomerHandler(customerSvc)
 	regionH := handler.NewRegionHandler(regionSvc)
 	runtimeH := handler.NewRuntimeHandler(statsSvc)
@@ -82,6 +83,7 @@ func main() {
 	}
 
 	go warmupCountCache(ctx, pool)
+	go warmupAggregatesCache(ctx, aggSvc, aggCache)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -103,6 +105,39 @@ func resolveMigrationsDir() string {
 }
 
 const defaultFrom = "2020-01-01"
+
+func warmupAggregatesCache(ctx context.Context, svc *service.AggregateService, cache *service.AggregatesCache) {
+	time.Sleep(2 * time.Second)
+	now := time.Now()
+	ranges := [][2]string{
+		{now.AddDate(0, 0, -30).Format("2006-01-02"), now.Format("2006-01-02")},
+		{now.AddDate(0, 0, -90).Format("2006-01-02"), now.Format("2006-01-02")},
+		{now.AddDate(0, 0, -180).Format("2006-01-02"), now.Format("2006-01-02")},
+		{now.AddDate(-1, 0, 0).Format("2006-01-02"), now.Format("2006-01-02")},
+	}
+	for _, topN := range []int{3, 5} {
+		for _, r := range ranges {
+			from, to := r[0], r[1]
+			ck := service.AggregateCacheKey(from, to, topN)
+			if _, ok := cache.Get(ck); ok {
+				continue
+			}
+			data, err := svc.GetDailyAggregates(ctx, from, to, "", "", "", nil, nil, topN)
+			if err != nil {
+				continue
+			}
+			total, err := svc.GetExactTotal(ctx, from, to, "", "", "", nil, nil)
+			if err != nil {
+				continue
+			}
+			cache.Put(ck, map[string]any{
+				"data":                   data,
+				"totalOrders":            service.AdjustCount(total),
+				"totalOrdersApproximate": service.IsApproximateCount(total),
+			})
+		}
+	}
+}
 
 func warmupCountCache(ctx context.Context, pool *pgxpool.Pool) {
 	time.Sleep(3 * time.Second)

@@ -3,11 +3,9 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
 	"math"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/bganguly/go-dashboard/internal/model"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -278,14 +276,11 @@ func (s *AggregateService) queryMultiTokenViaCte(ctx context.Context, from, to, 
 }
 
 func (s *AggregateService) queryAggRows(ctx context.Context, sql string, args ...any) ([]aggRow, error) {
-	tQ := time.Now()
 	rows, err := s.db.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("[agg/data] db.Query returned %dms", time.Since(tQ).Milliseconds())
 	defer rows.Close()
-	tScan := time.Now()
 	var out []aggRow
 	for rows.Next() {
 		var r aggRow
@@ -294,7 +289,6 @@ func (s *AggregateService) queryAggRows(ctx context.Context, sql string, args ..
 		}
 		out = append(out, r)
 	}
-	log.Printf("[agg/data] scan %d rows %dms", len(out), time.Since(tScan).Milliseconds())
 	return out, rows.Err()
 }
 

@@ -1,21 +1,20 @@
 package handler
 
 import (
-	"log"
 	"net/http"
 	"sync"
-	"time"
 
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 type AggregateHandler struct {
-	svc *service.AggregateService
+	svc   *service.AggregateService
+	cache *service.AggregatesCache
 }
 
-func NewAggregateHandler(svc *service.AggregateService) *AggregateHandler {
-	return &AggregateHandler{svc: svc}
+func NewAggregateHandler(svc *service.AggregateService, cache *service.AggregatesCache) *AggregateHandler {
+	return &AggregateHandler{svc: svc, cache: cache}
 }
 
 func (h *AggregateHandler) Get(c *gin.Context) {
@@ -34,6 +33,16 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 	includeData := queryBool(c, "includeData", true)
 	includeTotal := queryBool(c, "includeTotal", true)
 
+	noFilters := q == "" && status == "" && regionCode == "" && minTotal == nil && maxTotal == nil
+
+	if noFilters && includeData && includeTotal {
+		ck := service.AggregateCacheKey(from, to, topCategories)
+		if cached, ok := h.cache.Get(ck); ok {
+			c.JSON(http.StatusOK, cached)
+			return
+		}
+	}
+
 	type dataResult struct {
 		v   any
 		err error
@@ -41,16 +50,13 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 	dataCh := make(chan dataResult, 1)
 	totalCh := make(chan dataResult, 1)
 
-	t0 := time.Now()
 	var wg sync.WaitGroup
 	if includeData {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tData := time.Now()
 			v, err := h.svc.GetDailyAggregates(c.Request.Context(),
 				from, to, q, status, regionCode, minTotal, maxTotal, topCategories)
-			log.Printf("[agg] GetDailyAggregates %dms", time.Since(tData).Milliseconds())
 			dataCh <- dataResult{v, err}
 		}()
 	}
@@ -58,15 +64,12 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tTotal := time.Now()
 			v, err := h.svc.GetExactTotal(c.Request.Context(),
 				from, to, q, status, regionCode, minTotal, maxTotal)
-			log.Printf("[agg] GetExactTotal %dms", time.Since(tTotal).Milliseconds())
 			totalCh <- dataResult{v, err}
 		}()
 	}
 	wg.Wait()
-	log.Printf("[agg] total handler %dms", time.Since(t0).Milliseconds())
 
 	body := gin.H{}
 	if includeData {
@@ -86,6 +89,10 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		raw := r.v.(int64)
 		body["totalOrders"] = service.AdjustCount(raw)
 		body["totalOrdersApproximate"] = service.IsApproximateCount(raw)
+	}
+
+	if noFilters && includeData && includeTotal {
+		h.cache.Put(service.AggregateCacheKey(from, to, topCategories), map[string]any(body))
 	}
 
 	c.JSON(http.StatusOK, body)
