@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
@@ -18,6 +20,7 @@ func NewAggregateHandler(svc *service.AggregateService, cache *service.Aggregate
 }
 
 func (h *AggregateHandler) Get(c *gin.Context) {
+	handlerStart := time.Now()
 	from := c.Query("from")
 	to := c.Query("to")
 	if from == "" || to == "" {
@@ -38,9 +41,11 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 	if noFilters && includeData && includeTotal {
 		ck := service.AggregateCacheKey(from, to, topCategories)
 		if cached, ok := h.cache.Get(ck); ok {
+			log.Printf("[AGG] cache HIT key=%s total=%dms", ck, time.Since(handlerStart).Milliseconds())
 			c.JSON(http.StatusOK, cached)
 			return
 		}
+		log.Printf("[AGG] cache MISS key=%s", ck)
 	}
 
 	type dataResult struct {
@@ -55,8 +60,10 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			t0 := time.Now()
 			v, err := h.svc.GetDailyAggregates(c.Request.Context(),
 				from, to, q, status, regionCode, minTotal, maxTotal, topCategories)
+			log.Printf("[AGG] GetDailyAggregates done in %dms err=%v", time.Since(t0).Milliseconds(), err)
 			dataCh <- dataResult{v, err}
 		}()
 	}
@@ -64,12 +71,15 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			t0 := time.Now()
 			v, err := h.svc.GetExactTotal(c.Request.Context(),
 				from, to, q, status, regionCode, minTotal, maxTotal)
+			log.Printf("[AGG] GetExactTotal done in %dms err=%v", time.Since(t0).Milliseconds(), err)
 			totalCh <- dataResult{v, err}
 		}()
 	}
 	wg.Wait()
+	log.Printf("[AGG] parallel queries done total=%dms", time.Since(handlerStart).Milliseconds())
 
 	body := gin.H{}
 	if includeData {
