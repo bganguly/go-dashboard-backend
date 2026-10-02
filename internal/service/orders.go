@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bganguly/go-dashboard/internal/cache"
 	"github.com/bganguly/go-dashboard/internal/model"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,12 +22,11 @@ const (
 )
 
 type OrderService struct {
-	db    *pgxpool.Pool
-	cache *cache.AggregatesCache
+	db *pgxpool.Pool
 }
 
-func NewOrderService(db *pgxpool.Pool, c *cache.AggregatesCache) *OrderService {
-	return &OrderService{db: db, cache: c}
+func NewOrderService(db *pgxpool.Pool) *OrderService {
+	return &OrderService{db: db}
 }
 
 func IsApproximateCount(n int64) bool { return n == countSentinel }
@@ -336,7 +334,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, req model.CreateOrderReq
 			 substring(cache_key from 'q=([^&]*)') = ''
 			 OR ($1::text IS NOT NULL AND $1::text ILIKE '%' || substring(cache_key from 'q=([^&]*)') || '%')`,
 			searchText)
-		s.cache.InvalidateAll()
 	}()
 
 	return map[string]any{

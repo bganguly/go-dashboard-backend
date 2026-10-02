@@ -4,18 +4,16 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/bganguly/go-dashboard/internal/cache"
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 type AggregateHandler struct {
-	svc   *service.AggregateService
-	cache *cache.AggregatesCache
+	svc *service.AggregateService
 }
 
-func NewAggregateHandler(svc *service.AggregateService, c *cache.AggregatesCache) *AggregateHandler {
-	return &AggregateHandler{svc: svc, cache: c}
+func NewAggregateHandler(svc *service.AggregateService) *AggregateHandler {
+	return &AggregateHandler{svc: svc}
 }
 
 func (h *AggregateHandler) Get(c *gin.Context) {
@@ -33,16 +31,6 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 	topCategories := queryInt(c, "topCategories", 5)
 	includeData := queryBool(c, "includeData", true)
 	includeTotal := queryBool(c, "includeTotal", true)
-
-	noFilters := q == "" && status == "" && regionCode == "" && minTotal == nil && maxTotal == nil
-	var cacheKey string
-	if noFilters && includeData && includeTotal {
-		cacheKey = cache.Key(from, to, topCategories)
-		if v, ok := h.cache.Get(cacheKey); ok {
-			c.JSON(http.StatusOK, v)
-			return
-		}
-	}
 
 	type dataResult struct {
 		v   any
@@ -92,9 +80,6 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		body["totalOrdersApproximate"] = service.IsApproximateCount(raw)
 	}
 
-	if cacheKey != "" {
-		h.cache.Put(cacheKey, body)
-	}
 	c.JSON(http.StatusOK, body)
 }
 
