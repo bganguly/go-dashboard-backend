@@ -108,24 +108,42 @@ const defaultFrom = "2020-01-01"
 
 func warmupCache(ctx context.Context, aggSvc *service.AggregateService, aggCache *cache.AggregatesCache) {
 	time.Sleep(2 * time.Second)
-	to := time.Now().Format("2006-01-02")
-	key := cache.Key(defaultFrom, to, 4)
-	if _, ok := aggCache.Get(key); ok {
-		return
+	now := time.Now()
+	to := now.Format("2006-01-02")
+
+	// Warm the same date ranges Spring Boot warms: 30/90/180/365d rolling + all-time.
+	// The React frontend sends topCategories=4 with each of these from-dates; warming
+	// them here ensures the first real request hits the cache instead of going to the DB.
+	froms := []string{
+		now.AddDate(0, 0, -30).Format("2006-01-02"),
+		now.AddDate(0, 0, -90).Format("2006-01-02"),
+		now.AddDate(0, 0, -180).Format("2006-01-02"),
+		now.AddDate(0, 0, -365).Format("2006-01-02"),
+		defaultFrom,
 	}
-	data, err := aggSvc.GetDailyAggregates(ctx, defaultFrom, to, "", "", "", nil, nil, 4)
-	if err != nil {
-		return
+
+	for _, from := range froms {
+		key := cache.Key(from, to, 4)
+		if _, ok := aggCache.Get(key); ok {
+			continue
+		}
+		data, err := aggSvc.GetDailyAggregates(ctx, from, to, "", "", "", nil, nil, 4)
+		if err != nil {
+			log.Printf("[warmup] aggregates err from=%s: %v", from, err)
+			continue
+		}
+		total, err := aggSvc.GetExactTotal(ctx, from, to, "", "", "", nil, nil)
+		if err != nil {
+			log.Printf("[warmup] total err from=%s: %v", from, err)
+			continue
+		}
+		aggCache.Put(key, map[string]any{
+			"data":                   data,
+			"totalOrders":            service.AdjustCount(total),
+			"totalOrdersApproximate": service.IsApproximateCount(total),
+		})
+		log.Printf("[warmup] cached from=%s to=%s topN=4", from, to)
 	}
-	total, err := aggSvc.GetExactTotal(ctx, defaultFrom, to, "", "", "", nil, nil)
-	if err != nil {
-		return
-	}
-	aggCache.Put(key, map[string]any{
-		"data":                   data,
-		"totalOrders":            service.AdjustCount(total),
-		"totalOrdersApproximate": service.IsApproximateCount(total),
-	})
 }
 
 func warmupCountCache(ctx context.Context, pool *pgxpool.Pool) {
