@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ func NewOrderHandler(svc *service.OrderService) *OrderHandler {
 }
 
 func (h *OrderHandler) List(c *gin.Context) {
+	log.Printf("[handler] List raw_query=%q", c.Request.URL.RawQuery)
 	q := c.Query("q")
 	page := queryInt(c, "page", 0) + 1
 	pageSize := queryInt(c, "size", 20)
@@ -55,6 +57,8 @@ func (h *OrderHandler) List(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[handler] List parsed page=%d size=%d sort=%q dir=%q q=%q status=%q regionCode=%q from=%q to=%q",
+		page, pageSize, sort, dir, q, status, regionCode, from, to)
 	result, err := h.svc.ListOrders(c.Request.Context(),
 		q, page, pageSize, sort, dir, status, regionCode, from, to, minTotal, maxTotal)
 	if err != nil {
