@@ -1,15 +1,27 @@
 package handler
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/bganguly/go-dashboard/internal/service"
 	"github.com/gin-gonic/gin"
 )
+
+func jsonResponse(c *gin.Context, code int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.Header("Content-Length", strconv.Itoa(len(data)))
+	c.Data(code, "application/json; charset=utf-8", data)
+}
 
 type AggregateHandler struct {
 	svc   *service.AggregateService
@@ -45,7 +57,7 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		ck := service.AggregateCacheKey(from, to, topCategories)
 		if cached, ok := h.cache.Get(ck); ok {
 			log.Printf("[AGG] cache HIT key=%s total=%dms", ck, time.Since(handlerStart).Milliseconds())
-			c.JSON(http.StatusOK, cached)
+			jsonResponse(c, http.StatusOK, cached)
 			return
 		}
 		log.Printf("[AGG] cache MISS key=%s", ck)
@@ -108,7 +120,7 @@ func (h *AggregateHandler) Get(c *gin.Context) {
 		h.cache.Put(service.AggregateCacheKey(from, to, topCategories), map[string]any(body))
 	}
 
-	c.JSON(http.StatusOK, body)
+	jsonResponse(c, http.StatusOK, body)
 }
 
 func queryBool(c *gin.Context, key string, def bool) bool {
