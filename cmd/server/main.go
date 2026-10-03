@@ -60,6 +60,7 @@ func main() {
 		c.Header("Access-Control-Allow-Origin", allowOrigin)
 		c.Header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type,Authorization")
+		c.Header("Access-Control-Max-Age", "3600")
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)
 			return
