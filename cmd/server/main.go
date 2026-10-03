@@ -15,7 +15,6 @@ import (
 	"github.com/bganguly/go-dashboard/internal/handler"
 	appMigrate "github.com/bganguly/go-dashboard/internal/migrate"
 	"github.com/bganguly/go-dashboard/internal/service"
-	gzip "github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -50,7 +49,6 @@ func main() {
 	runtimeH := handler.NewRuntimeHandler(statsSvc)
 
 	r := gin.Default()
-	r.Use(gzip.Gzip(gzip.DefaultCompression))
 
 	allowOrigin := os.Getenv("CORS_ORIGIN")
 	if allowOrigin == "" {
