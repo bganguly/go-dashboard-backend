@@ -206,19 +206,27 @@ if [[ -z "$AR_ECR_ROLE_ARN" || "$AR_ECR_ROLE_ARN" == "None" ]]; then
 fi
 
 _STEP="auto scaling config"
-_asc_rows=$(aws apprunner list-auto-scaling-configurations \
+_DESIRED_MIN=0
+_latest_asc_arn=$(aws apprunner list-auto-scaling-configurations \
   --auto-scaling-configuration-name "go-dash-scale-to-zero" \
   --region "$AWS_REGION" \
-  --query 'AutoScalingConfigurationSummaryList[*].[AutoScalingConfigurationArn,Status,Latest]' \
-  --output text 2>/dev/null || true)
-_ASC_ARN=$(printf '%s\n' "$_asc_rows" | awk '$2=="ACTIVE" && $3=="True" {print $1; exit}')
-[[ -z "$_ASC_ARN" ]] && _ASC_ARN=$(printf '%s\n' "$_asc_rows" | awk '$2=="ACTIVE" {print $1; exit}')
-[[ -z "$_ASC_ARN" ]] && _ASC_ARN=$(printf '%s\n' "$_asc_rows" | awk 'NF {print $1; exit}')
-if [[ -z "$_ASC_ARN" ]]; then
-  printf '  Creating auto-scaling config (min=0, max=2)...\n'
+  --query 'AutoScalingConfigurationSummaryList[?Latest==`true`].AutoScalingConfigurationArn' \
+  --output text 2>/dev/null | awk 'NF{print $1;exit}' || true)
+_current_min=""
+if [[ -n "$_latest_asc_arn" ]]; then
+  _current_min=$(aws apprunner describe-auto-scaling-configuration \
+    --auto-scaling-configuration-arn "$_latest_asc_arn" \
+    --region "$AWS_REGION" \
+    --query 'AutoScalingConfiguration.MinSize' --output text 2>/dev/null || true)
+fi
+if [[ "$_current_min" == "$_DESIRED_MIN" ]]; then
+  printf '  Auto-scaling config OK (min=%s) — reusing.\n' "$_DESIRED_MIN"
+  _ASC_ARN="$_latest_asc_arn"
+else
+  printf '  Creating new auto-scaling config version (min=%s, max=2)...\n' "$_DESIRED_MIN"
   _ASC_ARN=$(aws apprunner create-auto-scaling-configuration \
     --auto-scaling-configuration-name "go-dash-scale-to-zero" \
-    --min-size 0 --max-size 2 --max-concurrency 100 \
+    --min-size "$_DESIRED_MIN" --max-size 2 --max-concurrency 100 \
     --region "$AWS_REGION" \
     --query 'AutoScalingConfiguration.AutoScalingConfigurationArn' --output text)
 fi
