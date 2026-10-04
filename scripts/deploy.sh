@@ -24,7 +24,7 @@ printf '\n=== go-dashboard-backend ===\n\n'
 printf '  [1] Local  — Go server on localhost + local Postgres (no cost)'
 (( _local_running )) && printf ' [running]' || printf ' [not detected]'
 printf '\n'
-printf '  [2] AWS    — App Runner · Neon · scales to zero · ~$0/mo at idle\n'
+printf '  [2] AWS    — App Runner · Neon · min 1 instance · ~$5/mo at idle\n'
 printf '\nChoice [1/2, default 2]: '
 read -r _MODE
 case "${_MODE:-2}" in
@@ -206,7 +206,7 @@ if [[ -z "$AR_ECR_ROLE_ARN" || "$AR_ECR_ROLE_ARN" == "None" ]]; then
 fi
 
 _STEP="auto scaling config"
-_DESIRED_MIN=0
+_DESIRED_MIN=1
 _latest_asc_arn=$(aws apprunner list-auto-scaling-configurations \
   --auto-scaling-configuration-name "go-dash-scale-to-zero" \
   --region "$AWS_REGION" \
