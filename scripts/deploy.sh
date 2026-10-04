@@ -215,10 +215,10 @@ _ASC_ARN=$(printf '%s\n' "$_asc_rows" | awk '$2=="ACTIVE" && $3=="True" {print $
 [[ -z "$_ASC_ARN" ]] && _ASC_ARN=$(printf '%s\n' "$_asc_rows" | awk '$2=="ACTIVE" {print $1; exit}')
 [[ -z "$_ASC_ARN" ]] && _ASC_ARN=$(printf '%s\n' "$_asc_rows" | awk 'NF {print $1; exit}')
 if [[ -z "$_ASC_ARN" ]]; then
-  printf '  Creating auto-scaling config (min=1, max=2)...\n'
+  printf '  Creating auto-scaling config (min=0, max=2)...\n'
   _ASC_ARN=$(aws apprunner create-auto-scaling-configuration \
     --auto-scaling-configuration-name "go-dash-scale-to-zero" \
-    --min-size 1 --max-size 2 --max-concurrency 100 \
+    --min-size 0 --max-size 2 --max-concurrency 100 \
     --region "$AWS_REGION" \
     --query 'AutoScalingConfiguration.AutoScalingConfigurationArn' --output text)
 fi
