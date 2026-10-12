@@ -5,11 +5,9 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/bganguly/go-dashboard/internal/model"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,7 +16,6 @@ const (
 	maxPageSize     = 100
 	countCap        = 10_000
 	countSentinel   = int64(countCap + 1)
-	isoFmt          = "2006-01-02T15:04:05.000Z"
 )
 
 type OrderService struct {
@@ -171,15 +168,13 @@ func (s *OrderService) ListOrdersByCursor(ctx context.Context,
 	return s.toResult(ctx, orderRows, page, pageSize, total, totalPages, approximate)
 }
 
-// ExactCount — capped count used by list endpoints.
+// exactCount — capped count used by list endpoints.
 func (s *OrderService) exactCount(ctx context.Context,
 	q, status, regionCode, from, to string,
 	minTotal, maxTotal *float64) (int64, error) {
 
 	cacheKey := buildCountCacheKey(q, status, regionCode, from, to, minTotal, maxTotal)
 
-	// count_cache first — single PK lookup (~1ms on hit). Covers every code
-	// path below including rollup results written on the previous call.
 	hit, rcErr := s.readCountCache(ctx, cacheKey)
 	if rcErr == nil {
 		return hit, nil
@@ -315,8 +310,6 @@ func (s *OrderService) CreateOrder(ctx context.Context, req model.CreateOrderReq
 		return nil, err
 	}
 
-	// Invalidate count_cache rows that cover all orders (q="") or whose q token
-	// appears in the new order's search_text.
 	go func() {
 		bgCtx := context.Background()
 		var searchText *string
@@ -335,294 +328,4 @@ func (s *OrderService) CreateOrder(ctx context.Context, req model.CreateOrderReq
 		"total":    grandTotal,
 		"placedAt": placedAt.UTC().Format(isoFmt),
 	}, nil
-}
-
-// --- helpers ---
-
-type orderRow struct {
-	id        int
-	status    string
-	total     float64
-	currency  string
-	notes     *string
-	placedAt  time.Time
-	cID       int
-	email     string
-	firstName string
-	lastName  string
-	phone     *string
-	rID       int
-	rCode     string
-	rName     string
-}
-
-func collectOrderRows(rows pgx.Rows) ([]orderRow, error) {
-	defer rows.Close()
-	var out []orderRow
-	for rows.Next() {
-		var r orderRow
-		if err := rows.Scan(&r.id, &r.status, &r.total, &r.currency, &r.notes, &r.placedAt,
-			&r.cID, &r.email, &r.firstName, &r.lastName, &r.phone,
-			&r.rID, &r.rCode, &r.rName); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
-}
-
-func (s *OrderService) toResult(ctx context.Context, rows []orderRow, page, pageSize int,
-	total int64, totalPages int, approximate bool) (model.OrderListResult, error) {
-
-	if len(rows) == 0 {
-		return model.OrderListResult{
-			Data: []model.OrderDTO{}, Page: page, PageSize: pageSize,
-			Total: total, TotalPages: totalPages, Approximate: approximate,
-		}, nil
-	}
-
-	ids := make([]int, len(rows))
-	for i, r := range rows {
-		ids[i] = r.id
-	}
-	itemsByOrder, err := s.fetchItems(ctx, ids)
-	if err != nil {
-		return model.OrderListResult{}, err
-	}
-
-	data := make([]model.OrderDTO, len(rows))
-	for i, r := range rows {
-		items := itemsByOrder[r.id]
-		if items == nil {
-			items = []model.OrderItemDTO{}
-		}
-		data[i] = model.OrderDTO{
-			ID:       r.id,
-			Status:   r.status,
-			Total:    r.total,
-			Currency: r.currency,
-			Notes:    r.notes,
-			PlacedAt: r.placedAt.UTC().Format(isoFmt),
-			Customer: model.CustomerSummaryDTO{ID: r.cID, Email: r.email, FirstName: r.firstName, LastName: r.lastName},
-			Region:   model.RegionDTO{ID: r.rID, Code: r.rCode, Name: r.rName},
-			Items:    items,
-		}
-	}
-	return model.OrderListResult{
-		Data: data, Page: page, PageSize: pageSize,
-		Total: total, TotalPages: totalPages, Approximate: approximate,
-	}, nil
-}
-
-func (s *OrderService) fetchItems(ctx context.Context, orderIDs []int) (map[int][]model.OrderItemDTO, error) {
-	if len(orderIDs) == 0 {
-		return nil, nil
-	}
-	placeholders := make([]string, len(orderIDs))
-	args := make([]any, len(orderIDs))
-	for i, id := range orderIDs {
-		placeholders[i] = fmt.Sprintf("$%d", i+1)
-		args[i] = id
-	}
-	sql := `SELECT oi.id, oi."orderId", oi."productId", oi.quantity, oi."unitPrice", oi.discount,
-	               p.sku, p.name AS p_name
-	        FROM order_items oi
-	        JOIN products p ON p.id = oi."productId"
-	        WHERE oi."orderId" = ANY(ARRAY[` + strings.Join(placeholders, ",") + `]::int[])`
-
-	rows, err := s.db.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	result := map[int][]model.OrderItemDTO{}
-	for rows.Next() {
-		var (
-			id, orderID, productID, qty int
-			unitPrice, discount         float64
-			sku, pName                  string
-		)
-		if err := rows.Scan(&id, &orderID, &productID, &qty, &unitPrice, &discount, &sku, &pName); err != nil {
-			return nil, err
-		}
-		result[orderID] = append(result[orderID], model.OrderItemDTO{
-			ID:        id,
-			ProductID: productID,
-			Quantity:  qty,
-			UnitPrice: unitPrice,
-			Discount:  discount,
-			Product:   model.ProductSummaryDTO{ID: productID, SKU: sku, Name: pName},
-		})
-	}
-	return result, rows.Err()
-}
-
-func (s *OrderService) readCountCache(ctx context.Context, key string) (int64, error) {
-	var total int64
-	err := s.db.QueryRow(ctx,
-		`SELECT total FROM count_cache WHERE cache_key=$1 AND cached_at > NOW() - INTERVAL '30 days'`,
-		key).Scan(&total)
-	return total, err
-}
-
-func (s *OrderService) writeCountCache(ctx context.Context, key string, total int64) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO count_cache (cache_key,total,cached_at) VALUES ($1,$2,NOW())
-		 ON CONFLICT (cache_key) DO UPDATE SET total=$2, cached_at=NOW()`,
-		key, total)
-	return err
-}
-
-func buildOrderWhere(q, status, regionCode, from, to string,
-	minTotal, maxTotal *float64, qa *queryArgs) (string, bool) {
-
-	var clauses []string
-	needsRegionJoin := false
-
-	if q != "" {
-		q = strings.TrimSpace(q)
-		tokens := strings.Fields(q)
-		for _, tok := range tokens {
-			p := qa.Add("%" + tok + "%")
-			clauses = append(clauses, `o.search_text ILIKE `+p)
-		}
-	}
-	if status != "" {
-		parts := splitTrim(status)
-		quoted := make([]string, len(parts))
-		for i, s := range parts {
-			quoted[i] = fmt.Sprintf("'%s'::\"OrderStatus\"", strings.ReplaceAll(s, "'", "''"))
-		}
-		clauses = append(clauses, `o.status = ANY(ARRAY[`+strings.Join(quoted, ",")+`])`)
-	}
-	if regionCode != "" {
-		needsRegionJoin = true
-		parts := splitTrim(regionCode)
-		quoted := make([]string, len(parts))
-		for i, c := range parts {
-			quoted[i] = fmt.Sprintf("'%s'", strings.ReplaceAll(c, "'", "''"))
-		}
-		clauses = append(clauses, `r.code = ANY(ARRAY[`+strings.Join(quoted, ",")+`])`)
-	}
-	if from != "" {
-		p := qa.Add(from)
-		clauses = append(clauses, `o."placedAt" >= `+p+`::timestamptz`)
-	}
-	if to != "" {
-		p := qa.Add(to)
-		clauses = append(clauses, `o."placedAt" <= (`+p+`::date + interval '1 day' - interval '1 second')`)
-	}
-	if minTotal != nil {
-		p := qa.Add(*minTotal)
-		clauses = append(clauses, `o.total >= `+p)
-	}
-	if maxTotal != nil {
-		p := qa.Add(*maxTotal)
-		clauses = append(clauses, `o.total <= `+p)
-	}
-
-	if len(clauses) == 0 {
-		return "", needsRegionJoin
-	}
-	return "WHERE " + strings.Join(clauses, " AND "), needsRegionJoin
-}
-
-func buildCountCacheKey(q, status, regionCode, from, to string, minTotal, maxTotal *float64) string {
-	minStr, maxStr := "", ""
-	if minTotal != nil {
-		minStr = fmt.Sprintf("%g", *minTotal)
-	}
-	if maxTotal != nil {
-		maxStr = fmt.Sprintf("%g", *maxTotal)
-	}
-	return fmt.Sprintf("q=%s&status=%s&regionCode=%s&from=%s&to=%s&minTotal=%s&maxTotal=%s",
-		strings.ToLower(strings.TrimSpace(q)), status, regionCode, from, to, minStr, maxStr)
-}
-
-func buildOrderBy(sort, dir string) string {
-	switch sort {
-	case "customer":
-		return `c."firstName" ` + dir + `, c."lastName" ` + dir + `, o."placedAt" DESC`
-	case "total":
-		return `o.total ` + dir + `, o."placedAt" DESC`
-	case "status":
-		return `o.status ` + dir + `, o."placedAt" DESC`
-	case "id":
-		return `o.id ` + dir
-	default:
-		return `o."placedAt" ` + dir
-	}
-}
-
-func flipOrderBy(ob string) string {
-	ob = strings.ReplaceAll(ob, " DESC", "\x00")
-	ob = strings.ReplaceAll(ob, " ASC", " DESC")
-	ob = strings.ReplaceAll(ob, "\x00", " ASC")
-	return ob
-}
-
-func safeOrderSort(s string) string {
-	switch s {
-	case "placedAt", "total", "status", "customer", "id":
-		return s
-	}
-	return "placedAt"
-}
-
-func safeOrderDir(d string) string {
-	if strings.EqualFold(d, "asc") {
-		return "ASC"
-	}
-	return "DESC"
-}
-
-func hasShortToken(q string) bool {
-	for _, t := range strings.Fields(q) {
-		if len(t) < 3 {
-			return true
-		}
-	}
-	return false
-}
-
-func splitTrim(s string) []string {
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func clamp(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
-func max1(v int) int {
-	if v < 1 {
-		return 1
-	}
-	return v
-}
-
-func reverseSlice[T any](s []T) {
-	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
-		s[i], s[j] = s[j], s[i]
-	}
-}
-
-func nilStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }
