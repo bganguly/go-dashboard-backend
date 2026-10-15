@@ -12,6 +12,7 @@ services (lite scale-to-zero, full always-warm) — no IaC framework, `gcloud ru
 | Endpoint | URL |
 |---|---|
 | **API Explorer** | https://rk2yd5fmyd.us-east-1.awsapprunner.com/api-explorer |
+| **App** | https://rk2yd5fmyd.us-east-1.awsapprunner.com |
 | **Portfolio demo** | https://bganguly.github.io/#go_dashboard |
 
 > App Runner keeps a minimum of one instance running; the first request after a period of low traffic may have a slight delay.
