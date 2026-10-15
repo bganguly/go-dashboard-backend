@@ -28,7 +28,6 @@ Open the **API Explorer** to run live requests against every endpoint from the b
 3. **Aggregates** — `GET /api/aggregates?from=<date>&to=<date>&topCategories=<n>` returns daily order totals and revenue by product category from pre-aggregated summary tables.
 4. **Customers** — `GET /api/customers` lists customers; supports optional `q` filter.
 5. **Regions** — `GET /api/regions` returns the distinct region list used by the filter sidebar in the frontend.
-6. **Status** — `GET /api/status` and `GET /api/seed-stats` return runtime info and row counts.
 
 ---
 
