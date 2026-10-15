@@ -21,7 +21,7 @@ services (lite scale-to-zero, full always-warm) — no IaC framework, `gcloud ru
 
 ## Using the App
 
-Open **`/api-explorer`** on the running frontend to run live requests against every endpoint from the browser — no curl required.
+Open the **API Explorer** to run live requests against every endpoint from the browser.
 
 1. **List orders** — `GET /api/orders` returns a paginated, date-sorted list of orders; response header shows total row count and query time.
 2. **Full-text search** — `GET /api/orders?q=<term>` hits the GIN index on the denormalized `search_text` column; sub-second response times on 4 M+ rows.
