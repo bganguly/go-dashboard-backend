@@ -11,11 +11,10 @@ services (lite scale-to-zero, full always-warm) — no IaC framework, `gcloud ru
 
 | Endpoint | URL |
 |---|---|
-| **App** | available on demand |
-| **API** | available on demand |
+| **API Explorer** | https://rk2yd5fmyd.us-east-1.awsapprunner.com/api-explorer |
 | **Portfolio demo** | https://bganguly.github.io/#go_dashboard |
 
-> Cloud Run scales to zero when idle; run deploy.sh to provision GCP infrastructure and start the service.
+> App Runner keeps a minimum of one instance running; the first request after a period of low traffic may have a slight delay.
 
 ---
 
