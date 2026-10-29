@@ -47,6 +47,7 @@ func main() {
 	customerH := handler.NewCustomerHandler(customerSvc)
 	regionH := handler.NewRegionHandler(regionSvc)
 	runtimeH := handler.NewRuntimeHandler(statsSvc)
+	boundsH := handler.NewDatasetBoundsHandler(pool)
 
 	r := gin.Default()
 
@@ -79,6 +80,7 @@ func main() {
 		api.GET("/aggregates", aggH.Get)
 		api.GET("/customers", customerH.List)
 		api.GET("/regions", regionH.List)
+		api.GET("/dataset-bounds", boundsH.Get)
 	}
 
 	go warmupCountCache(ctx, pool)
