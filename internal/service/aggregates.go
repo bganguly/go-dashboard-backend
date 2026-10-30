@@ -42,7 +42,12 @@ func (s *AggregateService) GetDailyAggregates(ctx context.Context,
 
 	switch {
 	case !hasQ && !hasStatus && !hasRegion && !hasTotal:
-		rows, err = s.queryDailySummary(ctx, from, to, regionCode)
+		var bucketed []aggRow
+		bucketed, err = s.queryDailySummaryBucketed(ctx, from, to, regionCode, topCategories)
+		if err != nil {
+			return nil, err
+		}
+		return buildAggregateResultPreBucketed(bucketed), nil
 	case hasQ && isMultiToken && !hasTotal:
 		rows, err = s.queryMultiTokenViaCte(ctx, from, to, q, status, regionCode)
 		if err == nil && len(rows) == 0 {
@@ -75,22 +80,76 @@ type aggRow struct {
 	items    int64
 }
 
-func (s *AggregateService) queryDailySummary(ctx context.Context, from, to, regionCode string) ([]aggRow, error) {
-	where := `WHERE date BETWEEN $1::date AND $2::date`
-	args := []any{from, to}
+func (s *AggregateService) queryDailySummaryBucketed(ctx context.Context, from, to, regionCode string, topN int) ([]aggRow, error) {
+	if topN <= 0 {
+		topN = 5
+	}
+	regionFilter := ""
 	if regionCode != "" {
 		parts := splitTrim(regionCode)
 		quoted := make([]string, len(parts))
 		for i, c := range parts {
 			quoted[i] = fmt.Sprintf("'%s'", strings.ReplaceAll(c, "'", "''"))
 		}
-		where += ` AND "regionCode" = ANY(ARRAY[` + strings.Join(quoted, ",") + `])`
+		regionFilter = ` AND "regionCode" = ANY(ARRAY[` + strings.Join(quoted, ",") + `])`
 	}
-	sql := `SELECT date::text AS day, "categoryName" AS category,
-	               SUM("totalOrders")::bigint AS total_orders, CAST(SUM("totalRevenue") AS FLOAT8) AS total_revenue,
-	               SUM("totalItems")::bigint AS total_items
-	        FROM daily_summary ` + where + ` GROUP BY date, "categoryName" ORDER BY date`
-	return s.queryAggRows(ctx, sql, args...)
+	sql := `WITH top_cats AS (
+	  SELECT "categoryName" FROM daily_summary
+	  WHERE date BETWEEN $1::date AND $2::date` + regionFilter + `
+	  GROUP BY "categoryName" ORDER BY SUM("totalOrders") DESC LIMIT $3
+	)
+	SELECT date::text AS day,
+	       CASE WHEN "categoryName" IN (SELECT "categoryName" FROM top_cats)
+	            THEN "categoryName" ELSE 'Others' END AS category,
+	       SUM("totalOrders")::bigint AS total_orders,
+	       CAST(SUM("totalRevenue") AS FLOAT8) AS total_revenue,
+	       SUM("totalItems")::bigint AS total_items
+	FROM daily_summary
+	WHERE date BETWEEN $1::date AND $2::date` + regionFilter + `
+	GROUP BY date,
+	         CASE WHEN "categoryName" IN (SELECT "categoryName" FROM top_cats)
+	              THEN "categoryName" ELSE 'Others' END
+	ORDER BY date`
+	return s.queryAggRows(ctx, sql, from, to, topN)
+}
+
+func buildAggregateResultPreBucketed(rows []aggRow) []model.DailyAggregateDTO {
+	byDay := map[string]map[string]model.CategoryAggregateDTO{}
+	dayOrder := []string{}
+
+	for _, r := range rows {
+		if _, ok := byDay[r.day]; !ok {
+			byDay[r.day] = map[string]model.CategoryAggregateDTO{}
+			dayOrder = append(dayOrder, r.day)
+		}
+		avg := 0.0
+		if r.orders > 0 {
+			avg = r.revenue / float64(r.orders)
+		}
+		byDay[r.day][r.category] = model.CategoryAggregateDTO{
+			TotalOrders:   r.orders,
+			TotalRevenue:  r.revenue,
+			TotalItems:    r.items,
+			AvgOrderValue: math.Round(avg*100) / 100,
+		}
+	}
+
+	result := make([]model.DailyAggregateDTO, 0, len(dayOrder))
+	for _, day := range dayOrder {
+		cats := byDay[day]
+		var totO, totR, totI float64
+		for _, v := range cats {
+			totO += float64(v.TotalOrders)
+			totR += v.TotalRevenue
+			totI += float64(v.TotalItems)
+		}
+		result = append(result, model.DailyAggregateDTO{
+			Date:       day,
+			Categories: cats,
+			Totals:     model.TotalsDTO{TotalOrders: int64(totO), TotalRevenue: totR, TotalItems: int64(totI)},
+		})
+	}
+	return result
 }
 
 func (s *AggregateService) queryStatusCategorySummary(ctx context.Context, from, to, status string) ([]aggRow, error) {
