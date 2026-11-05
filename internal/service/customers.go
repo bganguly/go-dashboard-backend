@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/bganguly/go-dashboard/internal/model"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -57,14 +58,16 @@ func (s *CustomerService) ListCustomers(ctx context.Context,
 	var data []model.CustomerDTO
 	for rows.Next() {
 		var (
-			id, rID           int
-			email, fn, ln     string
-			phone, createdAt  *string
-			rCode, rName      string
+			id, rID       int
+			email, fn, ln string
+			phone         *string
+			createdAt     time.Time
+			rCode, rName  string
 		)
 		if err := rows.Scan(&id, &email, &fn, &ln, &phone, &createdAt, &rID, &rCode, &rName); err != nil {
 			return model.CustomerListResult{}, err
 		}
+		createdAtStr := createdAt.Format(time.RFC3339)
 		data = append(data, model.CustomerDTO{
 			ID:        id,
 			Email:     email,
@@ -72,7 +75,7 @@ func (s *CustomerService) ListCustomers(ctx context.Context,
 			LastName:  ln,
 			Phone:     phone,
 			Region:    model.RegionDTO{ID: rID, Code: rCode, Name: rName},
-			CreatedAt: createdAt,
+			CreatedAt: &createdAtStr,
 		})
 	}
 	if err := rows.Err(); err != nil {
